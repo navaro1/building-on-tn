@@ -1,7 +1,7 @@
 import tensornetwork as tn
 
 
-def compare_nodes(node_a: tn.Node, node_b: tn.Node) -> bool:
+def nodes_equal(node_a: tn.Node, node_b: tn.Node) -> bool:
     return node_a.tensor == node_b.tensor \
            and node_a.name == node_b.name \
            and node_a.edges == node_b.edges \

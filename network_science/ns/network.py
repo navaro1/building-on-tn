@@ -1,19 +1,45 @@
 import uuid
 
+import numpy as np
 import tensornetwork as tn
 
-from network_science.ns import compare_nodes
+from network_science.ns import nodes_equal
 
 
 # TODO:
-# - add tests for all methods
+# - add parsing from adjacency matrix
+# - add returning an adjacency matrix
+# - remember about undirected network
 
 class DirectedNetwork:
     """Class representing Networks. Network is a collection of nodes joined by edges"""
 
-    def __init__(self) -> None:
+    def __init__(self, adjacency_matrix: np.ndarray = None) -> None:
         self._nodes = {}
         self._edges = {}
+        if adjacency_matrix is None or adjacency_matrix.shape[-1] == 0:
+            pass
+        else:
+            if not all(np.array(adjacency_matrix.shape) == adjacency_matrix.shape[0]):
+                raise ValueError(f"adjacency matrix needs to be square, but was {adjacency_matrix.shape}")
+            it = np.nditer(adjacency_matrix, flags=['multi_index'])
+            for value in it:
+                if value == 0:
+                    for idx in it.multi_index:
+                        self.add_node_if_does_not_exist(0, idx + 1)  # shift is required to enumerate nodes from 1
+                elif all(np.array(it.multi_index) == it.multi_index[0]):  # diagonal
+                    if value % 2 != 0:
+                        raise ValueError("Non even number on an diagonal")
+                    node_idx = it.multi_index[0] + 1
+                    self.add_node_if_does_not_exist(0, node_idx)
+                    for times in range(value / 2):
+                        self.add_edge(node_idx, node_idx)
+                else:  # Not handling hypergraphs as of now
+                    idx_from = it.multi_index[0]
+                    idx_to = it.multi_index[1]
+                    self.add_node_if_does_not_exist(0, idx_from)
+                    self.add_node_if_does_not_exist(0, idx_to)
+                    self.add_edge(idx_from, idx_to)
 
     @property
     def nodes(self):
@@ -24,12 +50,10 @@ class DirectedNetwork:
         return self._edges.copy()
 
     def create_nodes_and_edge(self, from_value, to_value, from_name: str = None, to_name: str = None) -> None:
+        self.add_node_if_does_not_exist(from_value)
+        self.add_node_if_does_not_exist(to_value)
         str_from = from_name if from_name is not None else str(from_value)
         str_to = to_name if to_name is not None else str(to_value)
-        if str_from not in self._nodes:
-            self.add_node(from_value, str_from)
-        if str_to not in self._nodes:
-            self.add_node(to_value, str_to)
         if str_from not in self._edges or str_to not in self._edges[str_from]:
             self.add_edge(str_from, str_to)
 
@@ -40,6 +64,12 @@ class DirectedNetwork:
 
         new_node = tn.Node(node_value, name=actual_node_name)
         self._nodes[actual_node_name] = new_node
+
+    def add_node_if_does_not_exist(self, node_value, node_name: str = None) -> None:
+        actual_node_name = node_name if node_name is not None else str(node_value)
+        if actual_node_name not in self._nodes:
+            new_node = tn.Node(node_value, name=actual_node_name)
+            self._nodes[actual_node_name] = new_node
 
     def add_node_unique(self, node_value) -> str:
         node_name = str(uuid.uuid4())
@@ -103,7 +133,7 @@ class DirectedNetwork:
                 return False
             self_node = self._nodes[key]
             other_node = other.nodes[key]
-            if not compare_nodes(self_node, other_node):
+            if not nodes_equal(self_node, other_node):
                 return False
         return True
 
