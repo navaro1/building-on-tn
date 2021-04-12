@@ -1,15 +1,12 @@
-from itertools import chain, combinations, permutations, islice, combinations_with_replacement
-from multiprocessing import Pool
-import more_itertools
-
 import multiprocessing
-from joblib import Parallel, delayed
-from tqdm import tqdm
+from itertools import chain, combinations, permutations
 
+import more_itertools
+import numpy
 import numpy as np
 from mod import Mod
 from scipy.sparse import csgraph
-from numpy.linalg import eig
+from tqdm import tqdm
 
 np.random.seed(1302)
 dim = 20
@@ -113,7 +110,7 @@ def edge_condition(edges, cover):
 
 
 def non_empty_powerset(iterable):
-    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    "POWERSET([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
     s = list(iterable)
     return chain.from_iterable(combinations(s, r) for r in range(1, len(s) + 1))
 
@@ -175,7 +172,7 @@ bad_example = np.array(
 )
 
 
-def other_is_tk_diagnosable(matrix, t, k):
+def other_is_tk_diagnosable(matrix, t=1, k=1):
     if len(matrix) - 1 < 2 * t:
         return False
     vs = vertices(matrix)
@@ -189,12 +186,27 @@ def other_is_tk_diagnosable(matrix, t, k):
     return True
 
 
+def special_is_tk_diagnosable(c, t=1, k=1):
+    matrix = np.array(c)
+    if len(matrix) - 1 < 2 * t:
+        return None
+    vs = vertices(matrix)
+    if not all([len(in_nodes(v, matrix)) >= k for v in vs]):
+        return None
+    for p in reversed(range(1, k)):
+        sub_us = subsets_of_size(vs, 2 * (t - p))
+        for sub_u in sub_us:
+            if not len(in_degree(matrix, sub_u)) > p:
+                return None
+    return matrix
+
+
 print("=!=!=!=!=")
 
 
 # print(other_is_tk_diagnosable(z, t=9, k=9))
 
-def check_if_t_k_diagnosable(c, t, k):
+def check_if_t_k_diagnosable(c, t=1, k=1):
     mtrx = np.array(c)
     if np.trace(mtrx) > 0:
         return None
@@ -218,33 +230,113 @@ def generate_all_minimal_t_k_matrices_of_dim(dim, t, k):
             yield mtrx
 
 
-def map_to_eigens(m):
+def generate_all_minimal_t_k_matrices_of_dim_par(dim, t, k):
+    if dim < 2 * t + 1:
+        return []
+    if k > t:
+        return []
+    base = [0] * (dim - k) + [1] * k
+    perms = set(permutations(base, dim))
+    inputs = permutations(perms, dim)
+    with multiprocessing.Pool(num_cores) as p:
+        results = p.map(check_if_t_k_diagnosable, inputs, 10_000)
+    return [result for result in results if result is not None]
+
+
+def map_to_lz_poly(m):
     l_z = csgraph.laplacian(m, normed=True)
     return np.poly(l_z).round(13)
 
 
-num_cores = multiprocessing.cpu_count()
-for n in range(3, 20):
-    s = []
-    print("Working on " + str(n))
-    tk = (n - 1) // 2
-    res = tqdm(generate_all_minimal_t_k_matrices_of_dim(n, 1, 1))
-    for chunk in more_itertools.chunked(res, 100_000):
-        temp = Parallel(
-            n_jobs=num_cores - 1)(delayed(map_to_eigens)(i) for i in tqdm(chunk))
-        uniqs = np.vstack(list({tuple(row) for row in temp}))
-        s.append(uniqs)
-    print("DONE PART UNO!")
-    if len(s) > 0:
-        s = np.vstack(s)
+def map_to_poly(m):
+    return np.poly(m).round(13)
 
-    set_of_polys = set({str(e) for e in s})
-    with open("tk_polys_3.txt", "a") as f:
-        f.write("========= " + str(n) + " =========\n")
-        f.write(str(len(set_of_polys)))
+
+def map_to_eigs(m):
+    eig_val, eig_vec = np.linalg.eig(m)
+    return eig_val.round(13), np.sort(eig_vec.round(13))
+
+
+def map_to_lz_eigs(m):
+    l_z = csgraph.laplacian(m, normed=True)
+    eig_val, eig_vec = np.linalg.eig(l_z)
+    return eig_val.round(13), np.sort(eig_vec.round(13))
+
+
+def chunk_the_chunks(chunk):
+    l = []
+    for m in chunk:
+        l.append(map_to_lz_poly(m))
+    return l
+
+
+num_cores = (multiprocessing.cpu_count() * 3) // 4
+
+
+def write_to_file(matrices, filename, n, t, k):
+    set_of_lz_polys = set({str(e) for e in matrices})
+    with open(filename, "a") as f:
+        f.write("========= dim: {}, t: {}, k: {} =========\n".format(n, t, k))
+        f.write(str(len(set_of_lz_polys)))
         f.write("\n")
-        for a in set_of_polys:
+        for a in set_of_lz_polys:
             f.write(a)
             f.write("\n")
 
-# print(d)
+mininmum = 3
+maximum = 14
+for t in range(1, ((maximum - 1) // 2) + 1):
+    for k in range(1, t + 1):
+        for n in range(mininmum, maximum):
+            if t == 1 and n < 12:
+                continue
+            if t > 1 and k == 1:
+                continue
+            if n < 2 * t + 1:
+                continue
+            print("Working on dim: " + str(n) + ", t: " + str(t) + ", k: " + str(k))
+            batch_size = num_cores * 10_000
+            lz_matrices = None
+            m_matrices = None
+            e_vals_matrices = None
+            e_vecs_matrices = None
+            l_vals_matrices = None
+            l_vecs_matrices = None
+
+            dim = n
+            #####
+            base = [0] * (dim - k) + [1] * k
+            perms = set(permutations(base, dim))
+            inputs = permutations(perms, dim)  # generator
+            ###
+            for retrieved_perms in tqdm(more_itertools.chunked(inputs, batch_size)):
+                with multiprocessing.Pool(num_cores) as p:
+                    minimal_t_k = p.map(check_if_t_k_diagnosable, retrieved_perms, 10_000)
+                minimal_t_k = [r for r in minimal_t_k if r is not None]
+                with multiprocessing.Pool(num_cores) as pool:
+                    lz_poly = pool.map(map_to_lz_poly, minimal_t_k, 10_000)
+                if len(lz_poly) > 0:
+                    lz_poly = np.unique(lz_poly, axis=0)
+                if lz_matrices is None or len(lz_matrices) == 0:
+                    lz_matrices = lz_poly
+                elif len(lz_poly) > 0:
+                    try:
+                        lz_matrices = numpy.concatenate((lz_poly, lz_matrices), axis=0)
+                    except Exception:
+                        print(lz_poly)
+                        print(lz_matrices)
+
+                with multiprocessing.Pool(num_cores) as pool:
+                    m_poly = pool.map(map_to_poly, minimal_t_k, 10_000)
+                if len(m_poly) > 0:
+                    m_poly = np.unique(m_poly, axis=0)
+                if m_matrices is None or len(m_matrices) == 0:
+                    m_matrices = m_poly
+                elif len(m_poly) > 0:
+                    m_matrices = numpy.concatenate((m_poly, m_matrices), axis=0)
+
+            lz_matrices = np.unique(lz_matrices, axis=0)
+            m_matrices = np.unique(m_matrices, axis=0)
+
+            write_to_file(lz_matrices, "lz_matrices.txt", dim, t, k)
+            write_to_file(m_matrices, "m_matrices.txt", dim, t, k)
